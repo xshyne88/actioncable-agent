@@ -45,10 +45,10 @@ func NewClient(address string, dialer *websocket.Dialer) (*Client, error) {
 }
 
 func runLoop(c *Client) {
-	pullAndRouteWsMessages(c.conn, c)
+	getWsMessages(c.conn, c)
 }
 
-func pullAndRouteWsMessages(conn *websocket.Conn, c *Client) {
+func getWsMessages(conn *websocket.Conn, c *Client) {
 	evt := &Event{}
 	for {
 		if err := conn.ReadJSON(&evt); err != nil {

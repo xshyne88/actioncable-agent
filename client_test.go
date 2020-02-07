@@ -1,6 +1,7 @@
 package client
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -9,6 +10,12 @@ import (
 
 func assert(act, exp interface{}, t *testing.T) {
 	if act != exp {
+		t.Errorf("Act: %v: Exp: %v", act, exp)
+	}
+}
+
+func assertDeep(act, exp interface{}, t *testing.T) {
+	if !reflect.DeepEqual(exp, act) {
 		t.Errorf("Act: %v: Exp: %v", act, exp)
 	}
 }
@@ -74,7 +81,7 @@ func TestClientOnEvent(t *testing.T) {
 		return nil
 	})
 
-	time.Sleep(time.Second * 2)
+	time.Sleep(time.Second * 20)
 
 	assert(actual.event.Type, "ping", t)
 }
