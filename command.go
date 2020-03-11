@@ -1,10 +1,10 @@
-package client
+package actioncable
 
 import (
 	"encoding/json"
 )
 
-// Following ActionCable protocol
+// Command struct that follows ActionCable protocol
 type Command struct {
 	Command    string          `json:"command"`
 	Data       json.RawMessage `json:"data,omitempty"`
@@ -21,22 +21,24 @@ type innerIdentifier struct {
 	Channel string `json:"channel"`
 }
 
+// NewSubscription sugar wrapper for subscription command
 func NewSubscription(chanName string) *Command {
 	return NewCommand("subscribe", chanName)
 }
 
+// CancelSubscription sugar wrapper for subscription command
 func CancelSubscription(chanName string) *Command {
 	return NewCommand("unsubscribe", chanName)
 }
 
+// NewCommand instantiates a new command
 func NewCommand(command, chanName string) *Command {
-	c := &Command{
+	return &Command{
 		Command: command,
 		Identifier: Identifier{
 			Channel: chanName,
 		},
 	}
-	return c
 }
 
 // MarshalJSON encodes the Identifier from JSON

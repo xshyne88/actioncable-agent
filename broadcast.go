@@ -1,9 +1,10 @@
-package client
+package actioncable
 
 // Broadcast is a hub for broadcasting messages
 type Broadcast struct {
-	EventChan   chan Event
-	ConnectChan chan Event
+	EventChan     chan Event
+	ConnectChan   chan Event
+	HeartbeatChan chan Event
 
 	ErrorChan chan error
 
@@ -13,10 +14,11 @@ type Broadcast struct {
 // NewBroadcast is a constructor for Broadcast
 func NewBroadcast() *Broadcast {
 	return &Broadcast{
-		EventChan:   make(chan Event),
-		ConnectChan: make(chan Event),
-		DoneChan:    make(chan struct{}),
-		ErrorChan:   make(chan error),
+		EventChan:     make(chan Event),
+		ConnectChan:   make(chan Event),
+		HeartbeatChan: make(chan Event),
+		DoneChan:      make(chan struct{}),
+		ErrorChan:     make(chan error),
 	}
 }
 
@@ -36,6 +38,14 @@ func (b *Broadcast) Event(e Event) {
 	}()
 }
 
+// Ping channel
+func (b *Broadcast) Ping(e Event) {
+	go func() {
+		b.HeartbeatChan <- e
+		return
+	}()
+}
+
 // Connect puts event on connect channel
 func (b *Broadcast) Connect(e Event) {
 	go func() {
@@ -46,8 +56,5 @@ func (b *Broadcast) Connect(e Event) {
 
 // Close puts struct onto done channel
 func (b *Broadcast) Close() {
-	go func() {
-		b.DoneChan <- struct{}{}
-		return
-	}()
+	b.DoneChan <- struct{}{}
 }

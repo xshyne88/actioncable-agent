@@ -1,121 +1,176 @@
-package client
+package actioncable
 
 import (
 	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
+	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/xshyne88/agent/command"
 )
 
+// Client for ActionCable Protocol websockets
 type Client struct {
+	mux       sync.Mutex
 	address   string
+	dialer    *websocket.Dialer
 	conn      *websocket.Conn
 	broadcast *Broadcast
+	handlers  []func()
 }
 
+// Event ActionCable Protocol
 type Event struct {
 	Type string `json:"type"`
 
-	Message    json.RawMessage     `json:"message"`
-	Data       json.RawMessage     `json:"data"`
-	Identifier *command.Identifier `json:"identifier"`
+	Message    json.RawMessage `json:"message"`
+	Data       json.RawMessage `json:"data"`
+	Identifier *Identifier     `json:"identifier"`
 }
+
+// Payload gets returned from all of the callbacks
+type Payload struct {
+	event Event
+}
+
+const (
+	welcome = "welcome"
+	ping    = "ping"
+)
 
 // NewClient creates new Client Object
-func NewClient(address string, dialer *websocket.Dialer) (*Client, error) {
-	conn, _, err := dialer.Dial(address, make(http.Header))
-
-	if err != nil {
-		log.Fatal(err)
-		return nil, err
-	}
-
-	c := &Client{
+func NewClient(address string) *Client {
+	return &Client{
 		address:   address,
-		conn:      conn,
 		broadcast: NewBroadcast(),
+		handlers:  []func(){},
+		dialer:    &websocket.Dialer{HandshakeTimeout: time.Second * 1},
+	}
+}
+
+// WithDialer allows a custom dialer to be passed
+func (c *Client) WithDialer(dialer *websocket.Dialer) *Client {
+	c.dialer = dialer
+	return c
+}
+
+// Serve dials back home and sets up the handlers
+// note that conn MUST be set on the client before ranging over the handlers
+func (c *Client) Serve() error {
+	conn, _, err := c.dialer.Dial(c.address, nil)
+	if err != nil {
+		return err
 	}
 
-	go runLoop(c)
+	c.conn = conn
 
-	return c, nil
+	for _, h := range c.handlers {
+		go h()
+	}
+
+	go readLoop(c)
+
+	return nil
 }
 
-func runLoop(c *Client) {
-	getWsMessages(c.conn, c)
-}
-
-func getWsMessages(conn *websocket.Conn, c *Client) {
+// loop pulls msgs off the stream and sends them to broadcast
+func readLoop(c *Client) {
 	evt := &Event{}
 	for {
-		if err := conn.ReadJSON(&evt); err != nil {
+		if err := c.conn.ReadJSON(&evt); err != nil {
 			c.broadcast.Error(err)
 		}
-		if evt.Type == "welcome" {
+		switch evt.Type {
+		case welcome:
 			c.broadcast.Connect(*evt)
-		} else {
+		case ping:
+			c.broadcast.Ping(*evt)
+		default:
 			c.broadcast.Event(*evt)
 		}
 	}
 }
 
-// OnConnect is
-func (c *Client) OnConnect(cb func(conn *websocket.Conn) error) error {
-	go func() {
+// OnConnect callback fired when Ws is first dialed
+func (c *Client) OnConnect(cb func(conn *websocket.Conn) error) {
+	f := func() {
 		for {
 			select {
 			case <-c.broadcast.ConnectChan:
 				cb(c.conn)
 			case <-c.broadcast.DoneChan:
 				return
-			default:
 			}
 		}
-	}()
-	return nil
+	}
+	c.handlers = append(c.handlers, f)
 }
 
-// Payload gets returned to the callback user
-type Payload struct {
-	event Event
-}
-
-// OnEvent is
-func (c *Client) OnEvent(eventType string, cb func(conn *websocket.Conn, payload *Payload) error) error {
-	go func() {
+// OnEvent is fired when any message at all is recieved from the api
+func (c *Client) OnEvent(chanName string, cb func(conn *websocket.Conn, payload *Payload, err error)) {
+	f := func() {
+		err := c.Subscribe(chanName)
+		if err != nil {
+			cb(c.conn, &Payload{}, err)
+		}
 		for {
 			select {
 			case event := <-c.broadcast.EventChan:
-				switch event.Type {
-				case eventType:
-					cb(c.conn, &Payload{event: event})
-				default:
-					fmt.Printf("non %s message received", eventType)
+				if event.Identifier.Channel == chanName {
+					cb(c.conn, &Payload{event: event}, nil)
 				}
 			case <-c.broadcast.DoneChan:
 				return
-			default:
 			}
 		}
-	}()
-	return nil
+	}
+	c.handlers = append(c.handlers, f)
 }
 
-// OnDisconnect is
-func (c *Client) OnDisconnect(cb func(conn *websocket.Conn) error) error {
-	// Todo: needs to make sure it runs before close -
-	go func() {
+// OnHeartbeat provides a way to setup a handler on a ping message
+func (c *Client) OnHeartbeat(cb func(conn *websocket.Conn, payload *Payload) error) {
+	f := func() {
 		for {
 			select {
+			case event := <-c.broadcast.HeartbeatChan:
+				cb(c.conn, &Payload{event: event})
 			case <-c.broadcast.DoneChan:
-				cb(c.conn)
 				return
 			}
 		}
-	}()
+	}
+	c.handlers = append(c.handlers, f)
+}
+
+// OnDisconnect is the cb fired when the client disconnects
+func (c *Client) OnDisconnect(cb func(conn *websocket.Conn) error) {
+	f := func() {
+		<-c.broadcast.DoneChan
+		cb(c.conn)
+	}
+	c.handlers = append(c.handlers, f)
+}
+
+// Subscribe listens on a different channel
+func (c *Client) Subscribe(name string) error {
+	c.mux.Lock()
+	defer c.mux.Unlock()
+	cmd := NewSubscription(name)
+	err := c.conn.WriteJSON(cmd)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// Unsubscribe cancels subscriptions on a channel
+func (c *Client) Unsubscribe(name string) error {
+	c.mux.Lock()
+	defer c.mux.Unlock()
+	cmd := CancelSubscription(name)
+	err := c.conn.WriteJSON(cmd)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

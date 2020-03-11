@@ -1,4 +1,4 @@
-package client
+package actioncable
 
 import (
 	"encoding/json"
@@ -52,7 +52,7 @@ func TestNewCommand(t *testing.T) {
 	assertDeep(act, exp, t)
 }
 
-func TestNewSubscription(t *testing.T) {
+func TestNewSubscriptionCommand(t *testing.T) {
 	chanName := "AgentChannel"
 	exp := &Command{
 		Command: "subscribe",
@@ -66,10 +66,10 @@ func TestNewSubscription(t *testing.T) {
 	assertDeep(act, exp, t)
 }
 
-func TestCancelSubscription(t *testing.T) {
+func TestCancelSubscriptionCommand(t *testing.T) {
 	chanName := "AgentChannel"
 	exp := &Command{
-		Command: "subscribe",
+		Command: "unsubscribe",
 		Identifier: Identifier{
 			Channel: chanName,
 		},

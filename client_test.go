@@ -1,6 +1,7 @@
 package client
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -20,24 +21,33 @@ func assertDeep(act, exp interface{}, t *testing.T) {
 	}
 }
 
-func TestClientOnConnect(t *testing.T) {
-	dialer := &websocket.Dialer{
-		HandshakeTimeout: time.Second * 1,
-	}
-	client, err := NewClient("wss://api.rmm.dev/cable", dialer)
+func checkError(err error, t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+}
 
-	called := false
+func sleepMs(t time.Duration) {
+	time.Sleep(time.Millisecond * t)
+}
+
+func TestClientOnConnect(t *testing.T) {
+	dialer := &websocket.Dialer{HandshakeTimeout: time.Second * 1}
+	client, err := NewClient("wss://api.rmm.dev/cable", dialer)
+	checkError(err, t)
+
+	called := make(chan struct{})
 	client.OnConnect(func(conn *websocket.Conn) error {
-		called = true
+		called <- struct{}{}
 		return nil
 	})
 
-	time.Sleep(time.Second * 2)
+	err = client.Serve()
+	checkError(err, t)
 
-	assert(called, true, t)
+	sleepMs(500)
+
+	assert(<-called, true, t)
 }
 
 func TestClientOnDisconnect(t *testing.T) {
@@ -45,24 +55,63 @@ func TestClientOnDisconnect(t *testing.T) {
 		HandshakeTimeout: time.Second * 1,
 	}
 	client, err := NewClient("wss://api.rmm.dev/cable", dialer)
+	checkError(err, t)
+
+	var called bool
+	var count int
+
+	client.OnDisconnect(func(conn *websocket.Conn) error {
+		called = true
+		count++
+		return nil
+	})
+
+	err = client.Serve()
+	checkError(err, t)
+
+	sleepMs(200)
+	client.Close()
+
+	// give time for cb
+	sleepMs(200)
+	assert(called, true, t)
+	assert(count, 1, t)
+}
+
+// go test *.go -v -run TestClientOnHeartbeat -count=1
+func TestClientOnHeartbeat(t *testing.T) {
+	dialer := &websocket.Dialer{
+		HandshakeTimeout: time.Second * 1,
+	}
+	client, err := NewClient("wss://api.rmm.dev/cable", dialer)
 	if err != nil {
 		t.Error(err)
 	}
 
-	count := 0
-	called := false
-	client.OnDisconnect(func(conn *websocket.Conn) error {
-		count++
-		called = true
+	var actual Payload
+	done := make(chan struct{})
+
+	client.OnHeartbeat(func(conn *websocket.Conn, sample *Payload) error {
+		actual.event = sample.event
+		done <- struct{}{}
 		return nil
 	})
 
-	client.Close()
+	err = client.Serve()
+	checkError(err, t)
 
-	time.Sleep(time.Second * 2)
+	// give enough time for ping (3500 wasnt enough)
+	receiveSleep(4000, done)
+	assert(actual.event.Type, "ping", t)
+}
 
-	t.Logf("count: %d", count)
-	assert(called, true, t)
+func receiveSleep(t time.Duration, done chan struct{}) {
+	select {
+	case <-time.After(t * time.Millisecond):
+		return
+	case <-done:
+		return
+	}
 }
 
 func TestClientOnEvent(t *testing.T) {
@@ -74,14 +123,23 @@ func TestClientOnEvent(t *testing.T) {
 		t.Error(err)
 	}
 
-	var actual Payload
-	client.OnEvent("ping", func(conn *websocket.Conn, sample *Payload) error {
-		actual.event = sample.event
-		t.Logf("event: %+v", sample)
+	err = client.OnEvent("agent", func(conn *websocket.Conn, sample *Payload) error {
+		var str string
+		err := conn.ReadJSON(&str)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Print(str)
 		return nil
 	})
 
-	time.Sleep(time.Second * 20)
+	client.Serve()
+	err = client.Serve()
+	checkError(err, t)
 
-	assert(actual.event.Type, "ping", t)
+	sleepMs(2000)
+}
+
+func TestEnd2End(t *testing.T) {
+
 }
